@@ -1,6 +1,8 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "FeaturesCharacter.h"
+
+#include "AbilitySystemComponent.h"
 #include "Engine/LocalPlayer.h"
 #include "Camera/CameraComponent.h"
 #include "Components/CapsuleComponent.h"
@@ -10,6 +12,8 @@
 #include "EnhancedInputComponent.h"
 #include "EnhancedInputSubsystems.h"
 #include "InputActionValue.h"
+#include "Abilities/AbilitySet.h"
+#include "Character/Attributes/StandardAttributeSet.h"
 
 DEFINE_LOG_CATEGORY(LogTemplateCharacter);
 
@@ -52,6 +56,9 @@ AFeaturesCharacter::AFeaturesCharacter()
 
 	// Note: The skeletal mesh and anim blueprint references on the Mesh component (inherited from Character) 
 	// are set in the derived blueprint asset named ThirdPersonCharacter (to avoid direct content references in C++)
+
+    AbilitySystemComponent = CreateDefaultSubobject<UAbilitySystemComponent>(TEXT("AbilitySystemComponent"));
+    StandardAttributeSet = CreateDefaultSubobject<UStandardAttributeSet>(TEXT("StandardAttributeSet"));
 }
 
 void AFeaturesCharacter::BeginPlay()
@@ -67,6 +74,39 @@ void AFeaturesCharacter::BeginPlay()
 			Subsystem->AddMappingContext(DefaultMappingContext, 0);
 		}
 	}
+
+    if (HasAuthority())
+    {
+        SetupInitialAbilitiesAndEffects();
+    }
+}
+
+void AFeaturesCharacter::SetupInitialAbilitiesAndEffects()
+{
+    if (!IsValid(AbilitySystemComponent) || !IsValid(StandardAttributeSet))
+    {
+        return;
+    }
+
+    if (IsValid(InitialAbilitySet))
+    {
+        InitiallyGrantedAbilitySpecHandles.Append(InitialAbilitySet->GrantAbilitiesToAbilitySystem(AbilitySystemComponent));
+    }
+
+    if (IsValid(InitialGameplayEffect))
+    {
+        AbilitySystemComponent->ApplyGameplayEffectToSelf(InitialGameplayEffect->GetDefaultObject<UGameplayEffect>(), 0.f, AbilitySystemComponent->MakeEffectContext());
+    }
+
+    AbilitySystemComponent->GetGameplayAttributeValueChangeDelegate(UStandardAttributeSet::GetHealthAttribute()).AddUObject(this, &AFeaturesCharacter::OnHealthAttributeChanged);
+}
+
+void AFeaturesCharacter::OnHealthAttributeChanged(const FOnAttributeChangeData& OnAttributeChangeData)
+{
+    /*if (FMath::IsNearlyEqual(OnAttributeChangeData.NewValue, 0.f) && OnAttributeChangeData.OldValue > 0)
+    {
+        
+    }*/
 }
 
 //////////////////////////////////////////////////////////////////////////
@@ -86,6 +126,12 @@ void AFeaturesCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputC
 
 		// Looking
 		EnhancedInputComponent->BindAction(LookAction, ETriggerEvent::Triggered, this, &AFeaturesCharacter::Look);
+
+        for (const FAbilityInputToInputActionBinding& AbilityInputBinding : AbilityInputBindings.Bindings)
+        {
+            EnhancedInputComponent->BindAction(AbilityInputBinding.InputAction, ETriggerEvent::Triggered, this, &AFeaturesCharacter::AbilityInputBindingPressedHandler, AbilityInputBinding.AbilityInput);
+            EnhancedInputComponent->BindAction(AbilityInputBinding.InputAction, ETriggerEvent::Completed, this, &AFeaturesCharacter::AbilityInputBindingReleasedHandler, AbilityInputBinding.AbilityInput);
+        }
 	}
 	else
 	{
@@ -127,4 +173,14 @@ void AFeaturesCharacter::Look(const FInputActionValue& Value)
 		AddControllerYawInput(LookAxisVector.X);
 		AddControllerPitchInput(LookAxisVector.Y);
 	}
+}
+
+void AFeaturesCharacter::AbilityInputBindingPressedHandler(EAbilityInput AbilityInput)
+{
+    AbilitySystemComponent->AbilityLocalInputPressed(static_cast<uint32>(AbilityInput));
+}
+
+void AFeaturesCharacter::AbilityInputBindingReleasedHandler(EAbilityInput AbilityInput)
+{
+    AbilitySystemComponent->AbilityLocalInputReleased(static_cast<uint32>(AbilityInput));
 }
